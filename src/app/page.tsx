@@ -70,14 +70,13 @@ export default function PortfolioHome() {
             </Scroll>
 
           </ScrollControls>
-          
-          {/* Canlılık Katan Parlama Efekti (AAA Kalite AAA Post-Processing) */}
-          <EffectComposer>
+          <EffectComposer multisampling={8} autoClear={false}> 
             <ToneMapping mode={THREE.ACESFilmicToneMapping} />
             <Bloom 
-              luminanceThreshold={0.5} // Daha düşük eşik
-              mipmapBlur 
-              intensity={2.5} // Şiddet artırıldı
+              luminanceThreshold={0.2} // 0.2 veya 0.1 yapın ki ışığı hemen yakalasın
+              mipmapBlur={true} 
+              intensity={2.5} // Şiddeti artırabilirsiniz
+              radius={0.5} 
             />
           </EffectComposer>
         </Canvas>

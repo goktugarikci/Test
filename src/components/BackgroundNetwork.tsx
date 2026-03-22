@@ -1,86 +1,124 @@
 "use client";
 import * as THREE from "three";
-import { useRef, useMemo } from "react";
+import { useRef, useMemo, useLayoutEffect } from "react";
 import { useFrame } from "@react-three/fiber";
 import { useScroll } from "@react-three/drei";
 
+// Arka planda kullanılacak 4 temel şekil
+const shapes = [
+  new THREE.IcosahedronGeometry(0.6, 0),
+  new THREE.OctahedronGeometry(0.6, 0),
+  new THREE.TetrahedronGeometry(0.6, 0),
+  new THREE.BoxGeometry(0.8, 0.8, 0.8)
+];
+
 export default function BackgroundNetwork({ count = 200 }) {
-  const pointsRef = useRef<THREE.Points>(null!);
-  const linesRef = useRef<THREE.LineSegments>(null!);
+  const groupRef = useRef<THREE.Group>(null!);
   const scroll = useScroll();
 
-  // 1. Nokta Koordinatları ve Çizgi Buffer'larını Hazırlama (Bellek Tahsisi)
-  const { particles, linePositions } = useMemo(() => {
-    const particles = new Float32Array(count * 3);
-    for (let i = 0; i < count * 3; i++) {
-      particles[i] = (Math.random() - 0.5) * 40; // Geniş bir alana yayıyoruz
+  // Her şekil tipinden eşit sayıda oluşturacağız
+  const itemsPerShape = Math.floor(count / shapes.length);
+  const dummy = useMemo(() => new THREE.Object3D(), []);
+
+  // 1. Poligonların Rastgele Konum, Dönüş ve Renk Verilerini Hazırlama
+  const particlesData = useMemo(() => {
+    const data = [];
+    for (let i = 0; i < count; i++) {
+      const x = (Math.random() - 0.5) * 80; // Geniş X ekseni
+      const y = (Math.random() - 0.5) * 80; // Geniş Y ekseni
+      const z = (Math.random() - 0.5) * 50 - 15; // Derinlik (Kameradan uzak)
+      
+      // Ekranda bulundukları bölgeye göre renk ataması (Görseldeki gibi)
+      let colorStr = "#00ffcc"; // Sol taraf Turkuaz
+      if (x > 0 && y > 0) colorStr = "#ff5500"; // Sağ Üst Turuncu
+      else if (x < 0 && y < 0) colorStr = "#aa00ff"; // Sol Alt Mor
+      else if (x > 0 && y < 0) colorStr = "#ff0055"; // Sağ Alt Kırmızı
+
+      data.push({
+        x, y, z,
+        rx: Math.random() * Math.PI,
+        ry: Math.random() * Math.PI,
+        rz: Math.random() * Math.PI,
+        // Kendi etrafında dönüş hızı
+        speed: (Math.random() - 0.5) * 0.015, 
+        // Uzaktakiler küçük, yakındakiler büyük görünsün diye rastgele ölçek
+        scale: Math.random() * 0.6 + 0.4, 
+        color: new THREE.Color(colorStr)
+      });
     }
-    // Olası maksimum çizgi sayısı için bellek ayırıyoruz
-    const maxLines = (count * (count - 1)) / 2;
-    const linePositions = new Float32Array(maxLines * 6); 
-    
-    return { particles, linePositions };
+    return data;
   }, [count]);
 
-  useFrame((state) => {
-    const time = state.clock.getElapsedTime();
-    const positions = pointsRef.current.geometry.attributes.position.array as Float32Array;
-    let vertexpos = 0;
+  // InstancedMesh Referansları
+  const meshRefs = [
+    useRef<THREE.InstancedMesh>(null!),
+    useRef<THREE.InstancedMesh>(null!),
+    useRef<THREE.InstancedMesh>(null!),
+    useRef<THREE.InstancedMesh>(null!)
+  ];
 
-    // 2. Noktaları Yavaşça Hareket Ettir (Brownian Motion)
-    for (let i = 0; i < count; i++) {
-      positions[i * 3 + 0] += Math.sin(time * 0.2 + i) * 0.01;
-      positions[i * 3 + 1] += Math.cos(time * 0.3 + i) * 0.01;
-    }
-
-    // 3. Yakınlık Kontrolü (Nodlar arası mesafe 15 birimden kısaysa çizgi çek)
-    for (let i = 0; i < count; i++) {
-      for (let j = i + 1; j < count; j++) {
-        const dx = positions[i * 3 + 0] - positions[j * 3 + 0];
-        const dy = positions[i * 3 + 1] - positions[j * 3 + 1];
-        const dz = positions[i * 3 + 2] - positions[j * 3 + 2];
-        const distSq = dx * dx + dy * dy + dz * dz;
-
-        if (distSq < 15) {
-          linePositions[vertexpos++] = positions[i * 3 + 0];
-          linePositions[vertexpos++] = positions[i * 3 + 1];
-          linePositions[vertexpos++] = positions[i * 3 + 2];
-          linePositions[vertexpos++] = positions[j * 3 + 0];
-          linePositions[vertexpos++] = positions[j * 3 + 1];
-          linePositions[vertexpos++] = positions[j * 3 + 2];
-        }
+  // 2. Renkleri InstancedMesh'e Yükleme (Performans Sırrı)
+  useLayoutEffect(() => {
+    meshRefs.forEach((meshRef, shapeIndex) => {
+      if (!meshRef.current) return;
+      for (let i = 0; i < itemsPerShape; i++) {
+        const dataIndex = shapeIndex * itemsPerShape + i;
+        meshRef.current.setColorAt(i, particlesData[dataIndex].color);
       }
+      meshRef.current.instanceColor!.needsUpdate = true;
+    });
+  }, [particlesData]);
+
+  // 3. Her Karede (Frame) Poligonları Döndürme ve Scroll Takibi
+  useFrame(() => {
+    meshRefs.forEach((meshRef, shapeIndex) => {
+      if (!meshRef.current) return;
+      
+      for (let i = 0; i < itemsPerShape; i++) {
+        const dataIndex = shapeIndex * itemsPerShape + i;
+        const data = particlesData[dataIndex];
+        
+        // Rotasyonları güncelle
+        data.rx += data.speed;
+        data.ry += data.speed * 0.8;
+        data.rz += data.speed * 1.2;
+
+        // Pozisyon ve rotasyonu sanal objeye aktar
+        dummy.position.set(data.x, data.y, data.z);
+        dummy.rotation.set(data.rx, data.ry, data.rz);
+        dummy.scale.set(data.scale, data.scale, data.scale);
+        dummy.updateMatrix();
+
+        // Sanal objenin matrisini gerçek GPU kopyasına gönder
+        meshRef.current.setMatrixAt(i, dummy.matrix);
+      }
+      meshRef.current.instanceMatrix.needsUpdate = true;
+    });
+
+    // Parallax Efekti (Kullanıcı aşağı kaydırdıkça poligonlar yavaşça yukarı çıkar)
+    if (scroll && groupRef.current) {
+      const parallaxY = scroll.offset * 20;
+      groupRef.current.position.y = parallaxY;
     }
-
-    // Geometrileri GPU'ya güncelle
-    pointsRef.current.geometry.attributes.position.needsUpdate = true;
-    linesRef.current.geometry.setAttribute('position', new THREE.BufferAttribute(linePositions, 3));
-    linesRef.current.geometry.setDrawRange(0, vertexpos / 3); // Sadece var olan çizgileri çiz (Performans Sırrı)
-
-    // 4. Parallax Efekti (Scroll ile zıt yönde yavaşça hareket)
-    const parallaxY = scroll.offset * 15;
-    pointsRef.current.position.y = parallaxY;
-    linesRef.current.position.y = parallaxY;
   });
 
-  return (
-    <group position={[0, 0, -10]}> {/* Ana sahnenin arkasına yerleştir */}  
-      <points ref={pointsRef}>
-        <bufferGeometry>
-            <bufferAttribute 
-            attach="attributes-position" 
-            args={[particles, 3]} // args: [Veri Dizisi, Item Boyutu (X,Y,Z = 3)]
-            />
-        </bufferGeometry>
-        {/* Voxel hissi veren kare parçacıklar */}
-        <pointsMaterial color="#444" size={0.1} transparent opacity={0.6} sizeAttenuation />
-      </points>
+  // Ortak Sönük Tel Çerçeve Materyali
+  const wireframeMaterial = useMemo(() => new THREE.MeshBasicMaterial({
+    wireframe: true,
+    transparent: true,
+    opacity: 0.15, // Çok parlamaması ve arka planda kalması için düşük opaklık
+    depthWrite: false
+  }), []);
 
-      <lineSegments ref={linesRef}>
-        <bufferGeometry />
-        {/* Teknolojik bir görünüm için sönük mavi/gri bağlantılar */}
-        <lineBasicMaterial color="#2a4b6e" transparent opacity={0.15} depthWrite={false} />
-      </lineSegments>
+  return (
+    <group ref={groupRef} position={[0, 0, -5]}>
+      {shapes.map((geometry, index) => (
+        <instancedMesh 
+          key={index}
+          ref={meshRefs[index]} 
+          args={[geometry, wireframeMaterial, itemsPerShape]} 
+        />
+      ))}
     </group>
   );
 }

@@ -5,70 +5,85 @@ import { useFrame, useThree } from "@react-three/fiber";
 
 export default function InteractivePolygons({ count = 30000 }) {
   const meshRef = useRef<THREE.Points>(null!);
-  const { mouse } = useThree();
+  const { mouse, gl } = useThree(); // gl objesi pixel ratio için eklendi
 
-  // 1. Veri Hazırlama (Tüm scroll alanına yayıyoruz)
-  const { positions, randoms } = useMemo(() => {
+  const { positions } = useMemo(() => {
     const pos = new Float32Array(count * 3);
-    const rnd = new Float32Array(count);
     for (let i = 0; i < count; i++) {
-      pos[i * 3 + 0] = (Math.random() - 0.5) * 100; // X Genişliği
-      pos[i * 3 + 1] = (Math.random() - 0.5) * 150; // Y Yüksekliği (Tüm sayfayı kaplar)
-      pos[i * 3 + 2] = (Math.random() - 0.5) * 50;  // Z Derinliği
-      rnd[i] = Math.random();
+      pos[i * 3 + 0] = (Math.random() - 0.5) * 100;
+      pos[i * 3 + 1] = (Math.random() - 0.5) * 150;
+      pos[i * 3 + 2] = (Math.random() - 0.5) * 50;
     }
-    return { positions: pos, randoms: rnd };
+    return { positions: pos };
   }, [count]);
 
-  // 2. Özel Shader (Tazelenme ve Shading Efekti)
   const material = useMemo(() => new THREE.ShaderMaterial({
     uniforms: {
       uTime: { value: 0 },
       uMouse: { value: new THREE.Vector2(0, 0) },
-      uColor: { value: new THREE.Color("#00ffcc") }
+      // 1. EKRAN PİKSEL YOĞUNLUĞU: Vektörel netlik için şarttır.
+      uPixelRatio: { value: Math.min(typeof window !== 'undefined' ? window.devicePixelRatio : 1, 2) } 
     },
     transparent: true,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
     vertexShader: `
+      precision highp float;
       uniform float uTime;
       uniform vec2 uMouse;
+      uniform float uPixelRatio; // Piksel oranı uniform'u eklendi
       varying float vAlpha;
       varying vec3 vColor;
       
       void main() {
         vec3 pos = position;
         
-        // Refresh/Shading Efekti: Soldan sağa dalgalanma
-        pos.x += sin(uTime * 0.2 + pos.y) * 0.2;
-        pos.y += cos(uTime * 0.2 + pos.x) * 0.2;
+        pos.x += sin(uTime * 0.2 + pos.y * 0.1) * 0.2;
+        pos.y += cos(uTime * 0.2 + pos.x * 0.1) * 0.2;
         
-        // Fare etkileşimi: Yakındaki parçacıklar parlar
-        float dist = distance(pos.xy, uMouse * 40.0);
-        float force = 1.0 - smoothstep(0.0, 10.0, dist);
+        vec2 targetMouse = vec2(uMouse.x * 50.0, uMouse.y * 75.0); 
+        float dist = distance(pos.xy, targetMouse);
         
-        vAlpha = clamp(0.1 + force * 0.8, 0.0, 1.0);
-        vColor = mix(vec3(0.1, 0.2, 0.2), vec3(0.0, 1.0, 0.8), force);
+        float force = 1.0 - smoothstep(0.0, 15.0, dist); 
+        
+        vAlpha = clamp(0.05 + force * 0.8, 0.0, 1.0);
+        vColor = mix(vec3(0.02, 0.05, 0.1), vec3(0.0, 1.0, 0.8), force);
         
         vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
-        gl_PointSize = (20.0 / -mvPosition.z);
+        
+        // 2. RETİNA NETLİĞİ: Çıkan boyutu ekranın piksel yoğunluğu ile çarpıyoruz.
+        float pointSize = clamp(25.0 / -mvPosition.z, 1.0, 12.0);
+        gl_PointSize = pointSize * uPixelRatio;
+        
         gl_Position = projectionMatrix * mvPosition;
       }
     `,
     fragmentShader: `
+      precision highp float;
       varying float vAlpha;
       varying vec3 vColor;
       void main() {
+        // Noktanın merkezinden uzaklık (0.0 ile 0.5 arası)
         float r = distance(gl_PointCoord, vec2(0.5));
-        if (r > 0.5) discard; // Kareleri yuvarlağa çevir
-        gl_FragColor = vec4(vColor, vAlpha * (1.0 - r * 2.0));
+        
+        // 3. VEKTÖREL KENAR YUMUŞATMA (SVG Kalitesi)
+        // discard yerine smoothstep kullanıyoruz. 0.45 ile 0.5 arasında yumuşak bir anti-aliasing geçişi yapar.
+        // Bu sayede kenarlar tırtıklı değil, jilet gibi pürüzsüz olur.
+        float alphaShape = smoothstep(0.5, 0.45, r);
+        
+        if (alphaShape < 0.01) discard; // Sadece tamamen görünmez olanları GPU'dan at
+        
+        // Şeklin dolgunluğunu vAlpha ile çarpıp ekrana basıyoruz
+        gl_FragColor = vec4(vColor, vAlpha * alphaShape);
       }
     `
   }), []);
 
-  useFrame((state) => {
+  useFrame((state, delta) => {
     material.uniforms.uTime.value = state.clock.elapsedTime;
-    material.uniforms.uMouse.value.lerp(mouse, 0.1);
+    
+    material.uniforms.uMouse.value.x = THREE.MathUtils.damp(material.uniforms.uMouse.value.x, state.mouse.x, 5, delta);
+    material.uniforms.uMouse.value.y = THREE.MathUtils.damp(material.uniforms.uMouse.value.y, state.mouse.y, 5, delta);
   });
 
   return (
